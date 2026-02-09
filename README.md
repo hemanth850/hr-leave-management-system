@@ -60,3 +60,4 @@ Or run setup + compile + all tests in one shot:
 ## Notes
 - Default seed data uses year `2026` balances.
 - Update seed and test dates as required for your target demo year.
+

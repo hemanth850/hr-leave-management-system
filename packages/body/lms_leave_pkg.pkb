@@ -15,23 +15,6 @@ CREATE OR REPLACE PACKAGE BODY lms_leave_pkg AS
             RAISE_APPLICATION_ERROR(-20003, 'Employee not found.');
     END validate_employee_active;
 
-    PROCEDURE validate_request_exists (
-        p_request_id      IN NUMBER,
-        p_employee_id     OUT NUMBER,
-        p_status          OUT VARCHAR2,
-        p_requested_days  OUT NUMBER
-    ) IS
-    BEGIN
-        SELECT employee_id, status, requested_days
-          INTO p_employee_id, p_status, p_requested_days
-          FROM leave_requests
-         WHERE request_id = p_request_id
-           FOR UPDATE;
-    EXCEPTION
-        WHEN NO_DATA_FOUND THEN
-            RAISE_APPLICATION_ERROR(-20004, 'Leave request not found.');
-    END validate_request_exists;
-
     PROCEDURE check_overlap (
         p_employee_id IN NUMBER,
         p_start_date  IN DATE,
@@ -51,6 +34,43 @@ CREATE OR REPLACE PACKAGE BODY lms_leave_pkg AS
             RAISE_APPLICATION_ERROR(-20005, 'Overlapping leave request exists.');
         END IF;
     END check_overlap;
+
+    PROCEDURE notify_manager_for_request (
+        p_request_id   IN NUMBER,
+        p_employee_id  IN NUMBER
+    ) IS
+        l_manager_id NUMBER;
+    BEGIN
+        SELECT manager_id
+          INTO l_manager_id
+          FROM employees
+         WHERE employee_id = p_employee_id;
+
+        IF l_manager_id IS NOT NULL THEN
+            lms_notification_pkg.enqueue_notification(
+                p_recipient_emp_id => l_manager_id,
+                p_subject          => 'Leave Request Pending Approval',
+                p_message_body     => 'Request #' || p_request_id || ' needs your approval.',
+                p_channel          => 'INAPP'
+            );
+        END IF;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            NULL;
+    END notify_manager_for_request;
+
+    PROCEDURE notify_request_cancelled (
+        p_request_id  IN NUMBER,
+        p_employee_id IN NUMBER
+    ) IS
+    BEGIN
+        lms_notification_pkg.enqueue_notification(
+            p_recipient_emp_id => p_employee_id,
+            p_subject          => 'Leave Request Cancelled',
+            p_message_body     => 'Request #' || p_request_id || ' has been cancelled.',
+            p_channel          => 'INAPP'
+        );
+    END notify_request_cancelled;
 
     PROCEDURE apply_leave (
         p_employee_id   IN NUMBER,
@@ -107,6 +127,8 @@ CREATE OR REPLACE PACKAGE BODY lms_leave_pkg AS
             'PENDING_MANAGER'
         ) RETURNING request_id INTO p_request_id;
 
+        notify_manager_for_request(p_request_id, p_employee_id);
+
         COMMIT;
     EXCEPTION
         WHEN OTHERS THEN
@@ -121,56 +143,12 @@ CREATE OR REPLACE PACKAGE BODY lms_leave_pkg AS
         p_approver_id IN NUMBER,
         p_comments    IN VARCHAR2 DEFAULT NULL
     ) IS
-        l_emp_id           NUMBER;
-        l_status           VARCHAR2(30);
-        l_requested_days   NUMBER;
-        l_req_emp_id       NUMBER;
-        l_req_leave_type   NUMBER;
-        l_req_start_date   DATE;
-        l_level            NUMBER;
     BEGIN
-        validate_employee_active(p_approver_id);
-        validate_request_exists(p_request_id, l_emp_id, l_status, l_requested_days);
-
-        IF l_status = 'PENDING_MANAGER' THEN
-            l_level := 1;
-            UPDATE leave_requests
-               SET status = 'PENDING_HR'
-             WHERE request_id = p_request_id;
-        ELSIF l_status = 'PENDING_HR' THEN
-            l_level := 2;
-
-            SELECT employee_id, leave_type_id, start_date
-              INTO l_req_emp_id, l_req_leave_type, l_req_start_date
-              FROM leave_requests
-             WHERE request_id = p_request_id
-               FOR UPDATE;
-
-            UPDATE leave_balances
-               SET used_days = used_days + l_requested_days,
-                   updated_at = SYSTIMESTAMP
-             WHERE employee_id = l_req_emp_id
-               AND leave_type_id = l_req_leave_type
-               AND balance_year = EXTRACT(YEAR FROM l_req_start_date);
-
-            UPDATE leave_requests
-               SET status = 'APPROVED',
-                   decided_at = SYSTIMESTAMP
-             WHERE request_id = p_request_id;
-        ELSE
-            RAISE_APPLICATION_ERROR(-20009, 'Only pending requests can be approved.');
-        END IF;
-
-        INSERT INTO leave_approvals (request_id, approver_id, approval_level, action_taken, comments)
-        VALUES (p_request_id, p_approver_id, l_level, 'APPROVED', p_comments);
-
-        COMMIT;
-    EXCEPTION
-        WHEN OTHERS THEN
-            lms_common_pkg.log_error('lms_leave_pkg.approve_leave', SQLERRM,
-                'request_id=' || p_request_id || ', approver_id=' || p_approver_id);
-            ROLLBACK;
-            RAISE;
+        lms_approval_pkg.approve_leave(
+            p_request_id  => p_request_id,
+            p_approver_id => p_approver_id,
+            p_comments    => p_comments
+        );
     END approve_leave;
 
     PROCEDURE reject_leave (
@@ -178,37 +156,12 @@ CREATE OR REPLACE PACKAGE BODY lms_leave_pkg AS
         p_approver_id IN NUMBER,
         p_comments    IN VARCHAR2 DEFAULT NULL
     ) IS
-        l_emp_id         NUMBER;
-        l_status         VARCHAR2(30);
-        l_requested_days NUMBER;
-        l_level          NUMBER;
     BEGIN
-        validate_employee_active(p_approver_id);
-        validate_request_exists(p_request_id, l_emp_id, l_status, l_requested_days);
-
-        IF l_status = 'PENDING_MANAGER' THEN
-            l_level := 1;
-        ELSIF l_status = 'PENDING_HR' THEN
-            l_level := 2;
-        ELSE
-            RAISE_APPLICATION_ERROR(-20010, 'Only pending requests can be rejected.');
-        END IF;
-
-        UPDATE leave_requests
-           SET status = 'REJECTED',
-               decided_at = SYSTIMESTAMP
-         WHERE request_id = p_request_id;
-
-        INSERT INTO leave_approvals (request_id, approver_id, approval_level, action_taken, comments)
-        VALUES (p_request_id, p_approver_id, l_level, 'REJECTED', p_comments);
-
-        COMMIT;
-    EXCEPTION
-        WHEN OTHERS THEN
-            lms_common_pkg.log_error('lms_leave_pkg.reject_leave', SQLERRM,
-                'request_id=' || p_request_id || ', approver_id=' || p_approver_id);
-            ROLLBACK;
-            RAISE;
+        lms_approval_pkg.reject_leave(
+            p_request_id  => p_request_id,
+            p_approver_id => p_approver_id,
+            p_comments    => p_comments
+        );
     END reject_leave;
 
     PROCEDURE cancel_leave (
@@ -223,7 +176,12 @@ CREATE OR REPLACE PACKAGE BODY lms_leave_pkg AS
         l_start_date      DATE;
     BEGIN
         validate_employee_active(p_employee_id);
-        validate_request_exists(p_request_id, l_owner_id, l_status, l_requested_days);
+
+        SELECT employee_id, status, requested_days
+          INTO l_owner_id, l_status, l_requested_days
+          FROM leave_requests
+         WHERE request_id = p_request_id
+           FOR UPDATE;
 
         IF l_owner_id <> p_employee_id THEN
             RAISE_APPLICATION_ERROR(-20011, 'Only request owner can cancel leave.');
@@ -254,8 +212,12 @@ CREATE OR REPLACE PACKAGE BODY lms_leave_pkg AS
                decided_at = SYSTIMESTAMP
          WHERE request_id = p_request_id;
 
+        notify_request_cancelled(p_request_id, p_employee_id);
+
         COMMIT;
     EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RAISE_APPLICATION_ERROR(-20004, 'Leave request not found.');
         WHEN OTHERS THEN
             lms_common_pkg.log_error('lms_leave_pkg.cancel_leave', SQLERRM,
                 'request_id=' || p_request_id || ', employee_id=' || p_employee_id);

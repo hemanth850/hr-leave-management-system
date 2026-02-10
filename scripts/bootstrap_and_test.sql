@@ -5,5 +5,7 @@ WHENEVER SQLERROR EXIT SQL.SQLCODE;
 @tests/001_smoke_test.sql
 @tests/002_employee_pkg_test.sql
 @tests/003_report_pkg_test.sql
+@tests/004_approval_notification_test.sql
+@tests/005_scheduler_and_queue_test.sql
 
 EXIT;

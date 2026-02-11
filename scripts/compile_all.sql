@@ -3,6 +3,7 @@ WHENEVER SQLERROR EXIT SQL.SQLCODE;
 PROMPT Compiling package specs...
 @packages/spec/lms_common_pkg.pks
 @packages/spec/lms_notification_pkg.pks
+@packages/spec/lms_maintenance_pkg.pks
 @packages/spec/lms_employee_pkg.pks
 @packages/spec/lms_approval_pkg.pks
 @packages/spec/lms_leave_pkg.pks
@@ -12,6 +13,7 @@ PROMPT Compiling package specs...
 PROMPT Compiling package bodies...
 @packages/body/lms_common_pkg.pkb
 @packages/body/lms_notification_pkg.pkb
+@packages/body/lms_maintenance_pkg.pkb
 @packages/body/lms_employee_pkg.pkb
 @packages/body/lms_approval_pkg.pkb
 @packages/body/lms_leave_pkg.pkb

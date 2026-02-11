@@ -46,6 +46,9 @@ CREATE OR REPLACE PACKAGE BODY lms_employee_pkg AS
             'Y'
         ) RETURNING employee_id INTO p_employee_id;
 
+        INSERT INTO employee_roles (employee_id, role_code, is_active)
+        VALUES (p_employee_id, 'EMPLOYEE', 'Y');
+
         COMMIT;
     EXCEPTION
         WHEN OTHERS THEN

@@ -9,6 +9,21 @@ VALUES ('E1001', 'Alice Johnson', 'alice.johnson@acme.com', 1, DATE '2021-03-15'
 INSERT INTO employees (emp_code, full_name, email, manager_id, hire_date)
 VALUES ('E1002', 'Bob Smith', 'bob.smith@acme.com', 1, DATE '2022-07-01');
 
+INSERT INTO employee_roles (employee_id, role_code)
+VALUES (1, 'ADMIN');
+
+INSERT INTO employee_roles (employee_id, role_code)
+VALUES (1, 'HR');
+
+INSERT INTO employee_roles (employee_id, role_code)
+VALUES (1, 'MANAGER');
+
+INSERT INTO employee_roles (employee_id, role_code)
+VALUES (2, 'EMPLOYEE');
+
+INSERT INTO employee_roles (employee_id, role_code)
+VALUES (3, 'EMPLOYEE');
+
 INSERT INTO leave_types (leave_code, leave_name, yearly_quota_days, carry_forward_allowed)
 VALUES ('ANNUAL', 'Annual Leave', 24, 'Y');
 

@@ -1,4 +1,20 @@
 CREATE OR REPLACE PACKAGE BODY lms_approval_pkg AS
+    FUNCTION has_role (
+        p_employee_id IN NUMBER,
+        p_role_code   IN VARCHAR2
+    ) RETURN BOOLEAN IS
+        l_count NUMBER;
+    BEGIN
+        SELECT COUNT(*)
+          INTO l_count
+          FROM employee_roles
+         WHERE employee_id = p_employee_id
+           AND role_code = UPPER(TRIM(p_role_code))
+           AND is_active = 'Y';
+
+        RETURN l_count > 0;
+    END has_role;
+
     PROCEDURE validate_employee_active (p_employee_id IN NUMBER) IS
         l_active CHAR(1);
     BEGIN
@@ -15,15 +31,49 @@ CREATE OR REPLACE PACKAGE BODY lms_approval_pkg AS
             RAISE_APPLICATION_ERROR(-20302, 'Approver not found.');
     END validate_employee_active;
 
+    PROCEDURE validate_approval_authorization (
+        p_request_id      IN NUMBER,
+        p_requester_id    IN NUMBER,
+        p_request_status  IN VARCHAR2,
+        p_approver_id     IN NUMBER
+    ) IS
+        l_manager_id NUMBER;
+    BEGIN
+        IF has_role(p_approver_id, 'ADMIN') THEN
+            RETURN;
+        END IF;
+
+        IF p_request_status = 'PENDING_MANAGER' THEN
+            SELECT manager_id
+              INTO l_manager_id
+              FROM employees
+             WHERE employee_id = p_requester_id;
+
+            IF l_manager_id IS NULL OR l_manager_id <> p_approver_id THEN
+                RAISE_APPLICATION_ERROR(-20307, 'Only assigned manager (or ADMIN) can approve/reject at manager level.');
+            END IF;
+        ELSIF p_request_status = 'PENDING_HR' THEN
+            IF NOT has_role(p_approver_id, 'HR') THEN
+                RAISE_APPLICATION_ERROR(-20308, 'Only HR (or ADMIN) can approve/reject at HR level.');
+            END IF;
+        END IF;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RAISE_APPLICATION_ERROR(-20309, 'Requester not found for authorization check.');
+    END validate_approval_authorization;
+
     PROCEDURE notify_hr_on_manager_approval (
         p_request_id IN NUMBER
     ) IS
     BEGIN
         FOR rec IN (
-            SELECT employee_id
-              FROM employees
-             WHERE manager_id IS NULL
-               AND is_active = 'Y'
+            SELECT DISTINCT er.employee_id
+              FROM employee_roles er
+              JOIN employees e
+                ON e.employee_id = er.employee_id
+             WHERE er.role_code = 'HR'
+               AND er.is_active = 'Y'
+               AND e.is_active = 'Y'
         ) LOOP
             lms_notification_pkg.enqueue_notification(
                 p_recipient_emp_id => rec.employee_id,
@@ -73,6 +123,13 @@ CREATE OR REPLACE PACKAGE BODY lms_approval_pkg AS
           FROM leave_requests
          WHERE request_id = p_request_id
            FOR UPDATE;
+
+        validate_approval_authorization(
+            p_request_id     => p_request_id,
+            p_requester_id   => l_req_emp_id,
+            p_request_status => l_status,
+            p_approver_id    => p_approver_id
+        );
 
         IF l_status = 'PENDING_MANAGER' THEN
             l_level := 1;
@@ -130,14 +187,22 @@ CREATE OR REPLACE PACKAGE BODY lms_approval_pkg AS
     ) IS
         l_status VARCHAR2(30);
         l_level  NUMBER;
+        l_req_emp_id NUMBER;
     BEGIN
         validate_employee_active(p_approver_id);
 
-        SELECT status
-          INTO l_status
+        SELECT status, employee_id
+          INTO l_status, l_req_emp_id
           FROM leave_requests
          WHERE request_id = p_request_id
            FOR UPDATE;
+
+        validate_approval_authorization(
+            p_request_id     => p_request_id,
+            p_requester_id   => l_req_emp_id,
+            p_request_status => l_status,
+            p_approver_id    => p_approver_id
+        );
 
         IF l_status = 'PENDING_MANAGER' THEN
             l_level := 1;

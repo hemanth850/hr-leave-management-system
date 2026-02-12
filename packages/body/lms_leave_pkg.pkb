@@ -2,6 +2,10 @@ CREATE OR REPLACE PACKAGE BODY lms_leave_pkg AS
     PROCEDURE validate_employee_active (p_employee_id IN NUMBER) IS
         l_active CHAR(1);
     BEGIN
+        IF p_employee_id IS NULL THEN
+            RAISE_APPLICATION_ERROR(-20001, 'employee_id is required.');
+        END IF;
+
         SELECT is_active
           INTO l_active
           FROM employees
@@ -14,6 +18,53 @@ CREATE OR REPLACE PACKAGE BODY lms_leave_pkg AS
         WHEN NO_DATA_FOUND THEN
             RAISE_APPLICATION_ERROR(-20003, 'Employee not found.');
     END validate_employee_active;
+
+    PROCEDURE validate_leave_type_active (p_leave_type_id IN NUMBER) IS
+        l_active CHAR(1);
+    BEGIN
+        IF p_leave_type_id IS NULL THEN
+            RAISE_APPLICATION_ERROR(-20013, 'leave_type_id is required.');
+        END IF;
+
+        SELECT is_active
+          INTO l_active
+          FROM leave_types
+         WHERE leave_type_id = p_leave_type_id;
+
+        IF l_active <> 'Y' THEN
+            RAISE_APPLICATION_ERROR(-20014, 'Leave type is not active.');
+        END IF;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RAISE_APPLICATION_ERROR(-20015, 'Leave type not found.');
+    END validate_leave_type_active;
+
+    PROCEDURE validate_apply_inputs (
+        p_start_date IN DATE,
+        p_end_date   IN DATE,
+        p_reason     IN VARCHAR2
+    ) IS
+    BEGIN
+        IF p_start_date IS NULL OR p_end_date IS NULL THEN
+            RAISE_APPLICATION_ERROR(-20016, 'start_date and end_date are required.');
+        END IF;
+
+        IF TRUNC(p_end_date) < TRUNC(p_start_date) THEN
+            RAISE_APPLICATION_ERROR(-20006, 'Invalid leave date range.');
+        END IF;
+
+        IF EXTRACT(YEAR FROM p_start_date) <> EXTRACT(YEAR FROM p_end_date) THEN
+            RAISE_APPLICATION_ERROR(-20017, 'Leave request cannot span across multiple years.');
+        END IF;
+
+        IF TRUNC(p_start_date) < TRUNC(SYSDATE) THEN
+            RAISE_APPLICATION_ERROR(-20018, 'Backdated leave requests are not allowed.');
+        END IF;
+
+        IF p_reason IS NOT NULL AND LENGTH(p_reason) > 500 THEN
+            RAISE_APPLICATION_ERROR(-20019, 'Reason cannot exceed 500 characters.');
+        END IF;
+    END validate_apply_inputs;
 
     PROCEDURE check_overlap (
         p_employee_id IN NUMBER,
@@ -85,10 +136,8 @@ CREATE OR REPLACE PACKAGE BODY lms_leave_pkg AS
         l_available_days  NUMBER;
     BEGIN
         validate_employee_active(p_employee_id);
-
-        IF TRUNC(p_end_date) < TRUNC(p_start_date) THEN
-            RAISE_APPLICATION_ERROR(-20006, 'Invalid leave date range.');
-        END IF;
+        validate_leave_type_active(p_leave_type_id);
+        validate_apply_inputs(p_start_date, p_end_date, p_reason);
 
         l_days := lms_common_pkg.working_days_between(TRUNC(p_start_date), TRUNC(p_end_date));
         IF l_days <= 0 THEN
@@ -123,7 +172,7 @@ CREATE OR REPLACE PACKAGE BODY lms_leave_pkg AS
             TRUNC(p_start_date),
             TRUNC(p_end_date),
             l_days,
-            p_reason,
+            SUBSTR(p_reason, 1, 500),
             'PENDING_MANAGER'
         ) RETURNING request_id INTO p_request_id;
 
@@ -131,6 +180,8 @@ CREATE OR REPLACE PACKAGE BODY lms_leave_pkg AS
 
         COMMIT;
     EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            RAISE_APPLICATION_ERROR(-20020, 'No leave balance record found for employee/leave type/year.');
         WHEN OTHERS THEN
             lms_common_pkg.log_error('lms_leave_pkg.apply_leave', SQLERRM,
                 'employee_id=' || p_employee_id || ', leave_type_id=' || p_leave_type_id);
@@ -175,10 +226,18 @@ CREATE OR REPLACE PACKAGE BODY lms_leave_pkg AS
         l_leave_type_id   NUMBER;
         l_start_date      DATE;
     BEGIN
+        IF p_request_id IS NULL THEN
+            RAISE_APPLICATION_ERROR(-20021, 'request_id is required.');
+        END IF;
+
+        IF p_cancel_reason IS NOT NULL AND LENGTH(p_cancel_reason) > 500 THEN
+            RAISE_APPLICATION_ERROR(-20022, 'Cancel reason cannot exceed 500 characters.');
+        END IF;
+
         validate_employee_active(p_employee_id);
 
-        SELECT employee_id, status, requested_days
-          INTO l_owner_id, l_status, l_requested_days
+        SELECT employee_id, status, requested_days, start_date
+          INTO l_owner_id, l_status, l_requested_days, l_start_date
           FROM leave_requests
          WHERE request_id = p_request_id
            FOR UPDATE;
@@ -191,9 +250,13 @@ CREATE OR REPLACE PACKAGE BODY lms_leave_pkg AS
             RAISE_APPLICATION_ERROR(-20012, 'Request cannot be cancelled in current status.');
         END IF;
 
+        IF TRUNC(l_start_date) <= TRUNC(SYSDATE) THEN
+            RAISE_APPLICATION_ERROR(-20023, 'Request cannot be cancelled on/after leave start date.');
+        END IF;
+
         IF l_status = 'APPROVED' THEN
-            SELECT leave_type_id, start_date
-              INTO l_leave_type_id, l_start_date
+            SELECT leave_type_id
+              INTO l_leave_type_id
               FROM leave_requests
              WHERE request_id = p_request_id
                FOR UPDATE;
@@ -208,7 +271,7 @@ CREATE OR REPLACE PACKAGE BODY lms_leave_pkg AS
 
         UPDATE leave_requests
            SET status = 'CANCELLED',
-               cancel_reason = p_cancel_reason,
+               cancel_reason = SUBSTR(p_cancel_reason, 1, 500),
                decided_at = SYSTIMESTAMP
          WHERE request_id = p_request_id;
 

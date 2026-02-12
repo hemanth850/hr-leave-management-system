@@ -9,5 +9,7 @@ WHENEVER SQLERROR EXIT SQL.SQLCODE;
 @tests/005_scheduler_and_queue_test.sql
 @tests/006_authorization_and_overlap_test.sql
 @tests/007_retention_purge_test.sql
+@tests/008_api_hardening_test.sql
+@tests/009_dashboard_views_test.sql
 
 EXIT;

@@ -18,6 +18,10 @@ CREATE OR REPLACE PACKAGE BODY lms_approval_pkg AS
     PROCEDURE validate_employee_active (p_employee_id IN NUMBER) IS
         l_active CHAR(1);
     BEGIN
+        IF p_employee_id IS NULL THEN
+            RAISE_APPLICATION_ERROR(-20300, 'approver_id is required.');
+        END IF;
+
         SELECT is_active
           INTO l_active
           FROM employees
@@ -98,31 +102,48 @@ CREATE OR REPLACE PACKAGE BODY lms_approval_pkg AS
 
         lms_notification_pkg.enqueue_notification(
             p_recipient_emp_id => l_employee_id,
-            p_subject          => p_subject,
-            p_message_body     => p_body,
+            p_subject          => SUBSTR(p_subject, 1, 200),
+            p_message_body     => SUBSTR(p_body, 1, 1000),
             p_channel          => 'INAPP'
         );
     END notify_requester;
+
+    PROCEDURE validate_comments (p_comments IN VARCHAR2) IS
+    BEGIN
+        IF p_comments IS NOT NULL AND LENGTH(p_comments) > 500 THEN
+            RAISE_APPLICATION_ERROR(-20310, 'Approval comments cannot exceed 500 characters.');
+        END IF;
+    END validate_comments;
 
     PROCEDURE approve_leave (
         p_request_id  IN NUMBER,
         p_approver_id IN NUMBER,
         p_comments    IN VARCHAR2 DEFAULT NULL
     ) IS
-        l_status           VARCHAR2(30);
-        l_requested_days   NUMBER;
-        l_req_emp_id       NUMBER;
-        l_req_leave_type   NUMBER;
-        l_req_start_date   DATE;
-        l_level            NUMBER;
+        l_status            VARCHAR2(30);
+        l_requested_days    NUMBER;
+        l_req_emp_id        NUMBER;
+        l_req_leave_type    NUMBER;
+        l_req_start_date    DATE;
+        l_level             NUMBER;
+        l_available_days    NUMBER;
     BEGIN
+        IF p_request_id IS NULL THEN
+            RAISE_APPLICATION_ERROR(-20311, 'request_id is required.');
+        END IF;
+
         validate_employee_active(p_approver_id);
+        validate_comments(p_comments);
 
         SELECT status, requested_days, employee_id, leave_type_id, start_date
           INTO l_status, l_requested_days, l_req_emp_id, l_req_leave_type, l_req_start_date
           FROM leave_requests
          WHERE request_id = p_request_id
            FOR UPDATE;
+
+        IF l_req_emp_id = p_approver_id AND NOT has_role(p_approver_id, 'ADMIN') THEN
+            RAISE_APPLICATION_ERROR(-20312, 'Self-approval is not allowed unless approver has ADMIN role.');
+        END IF;
 
         validate_approval_authorization(
             p_request_id     => p_request_id,
@@ -141,6 +162,18 @@ CREATE OR REPLACE PACKAGE BODY lms_approval_pkg AS
             notify_hr_on_manager_approval(p_request_id);
         ELSIF l_status = 'PENDING_HR' THEN
             l_level := 2;
+
+            SELECT opening_balance_days + accrued_days + adjusted_days - used_days
+              INTO l_available_days
+              FROM leave_balances
+             WHERE employee_id = l_req_emp_id
+               AND leave_type_id = l_req_leave_type
+               AND balance_year = EXTRACT(YEAR FROM l_req_start_date)
+               FOR UPDATE;
+
+            IF l_available_days < l_requested_days THEN
+                RAISE_APPLICATION_ERROR(-20313, 'Insufficient balance at final approval stage.');
+            END IF;
 
             UPDATE leave_balances
                SET used_days = used_days + l_requested_days,
@@ -164,7 +197,7 @@ CREATE OR REPLACE PACKAGE BODY lms_approval_pkg AS
         END IF;
 
         INSERT INTO leave_approvals (request_id, approver_id, approval_level, action_taken, comments)
-        VALUES (p_request_id, p_approver_id, l_level, 'APPROVED', p_comments);
+        VALUES (p_request_id, p_approver_id, l_level, 'APPROVED', SUBSTR(p_comments, 1, 500));
 
         COMMIT;
     EXCEPTION
@@ -185,17 +218,26 @@ CREATE OR REPLACE PACKAGE BODY lms_approval_pkg AS
         p_approver_id IN NUMBER,
         p_comments    IN VARCHAR2 DEFAULT NULL
     ) IS
-        l_status VARCHAR2(30);
-        l_level  NUMBER;
-        l_req_emp_id NUMBER;
+        l_status      VARCHAR2(30);
+        l_level       NUMBER;
+        l_req_emp_id  NUMBER;
     BEGIN
+        IF p_request_id IS NULL THEN
+            RAISE_APPLICATION_ERROR(-20311, 'request_id is required.');
+        END IF;
+
         validate_employee_active(p_approver_id);
+        validate_comments(p_comments);
 
         SELECT status, employee_id
           INTO l_status, l_req_emp_id
           FROM leave_requests
          WHERE request_id = p_request_id
            FOR UPDATE;
+
+        IF l_req_emp_id = p_approver_id AND NOT has_role(p_approver_id, 'ADMIN') THEN
+            RAISE_APPLICATION_ERROR(-20312, 'Self-approval is not allowed unless approver has ADMIN role.');
+        END IF;
 
         validate_approval_authorization(
             p_request_id     => p_request_id,
@@ -218,7 +260,7 @@ CREATE OR REPLACE PACKAGE BODY lms_approval_pkg AS
          WHERE request_id = p_request_id;
 
         INSERT INTO leave_approvals (request_id, approver_id, approval_level, action_taken, comments)
-        VALUES (p_request_id, p_approver_id, l_level, 'REJECTED', p_comments);
+        VALUES (p_request_id, p_approver_id, l_level, 'REJECTED', SUBSTR(p_comments, 1, 500));
 
         notify_requester(
             p_request_id => p_request_id,

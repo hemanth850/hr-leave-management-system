@@ -1,6 +1,6 @@
 # HR Leave Management System (PL/SQL)
 
-Oracle PL/SQL project for end-to-end leave management with configurable leave types, balance tracking, role-based approvals, notifications, reporting, and scheduled maintenance.
+Oracle PL/SQL project for end-to-end leave management with configurable leave types, balance tracking, role-based approvals, notifications, reporting, dashboard views, and scheduled maintenance.
 
 ## Features
 - Employee and leave type master data
@@ -10,21 +10,28 @@ Oracle PL/SQL project for end-to-end leave management with configurable leave ty
 - Role-based approval authorization
   - Manager-level actions require assigned manager (or `ADMIN`)
   - HR-level actions require `HR` role (or `ADMIN`)
+- API hardening
+  - Null/length validation for request and approval inputs
+  - Backdated leave requests blocked
+  - Cross-year leave requests blocked
+  - Self-approval blocked (except `ADMIN`)
+  - Final-stage balance re-check before HR approval
 - Rejection and cancellation support
 - Weekend/holiday-aware working day calculation
 - Employee onboarding, deactivation, and yearly balance initialization
 - Notification queue enqueue + processing
 - Monthly accrual run + scheduler job management
 - Retention purge for notifications and error logs
+- Dashboard views for quick reporting
 - Ref cursor based reporting APIs
 - Error logging (`app_error_log`)
 
 ## Repository Structure
-- `ddl/`: schema DDL
+- `ddl/`: schema DDL and view DDL
 - `data/seed/`: sample seed data
 - `packages/spec/`: package specs
 - `packages/body/`: package bodies
-- `scripts/`: setup, compile, and job runners
+- `scripts/`: setup, compile, demo, and job runners
 - `tests/`: smoke and package tests
 
 ## Setup
@@ -76,6 +83,18 @@ Or run setup + compile + all tests in one shot:
   - `create_retention_purge_job`
   - `drop_retention_purge_job`
 
+## Views
+- `v_leave_request_dashboard`
+- `v_leave_balance_dashboard`
+- `v_pending_approval_aging`
+- `v_notification_summary`
+
+## Scripts
+- `scripts/manage_scheduler_job.sql`: Create and drop both jobs
+  - `LMS_MONTHLY_ACCRUAL_JOB`
+  - `LMS_RETENTION_PURGE_JOB`
+- `scripts/demo_interview_flow.sql`: End-to-end demo for interview/project walkthrough
+
 ## Tests
 - `tests/001_smoke_test.sql`: Leave request apply + 2-level approval flow
 - `tests/002_employee_pkg_test.sql`: Employee lifecycle APIs
@@ -84,11 +103,8 @@ Or run setup + compile + all tests in one shot:
 - `tests/005_scheduler_and_queue_test.sql`: Monthly accrual + queue processing
 - `tests/006_authorization_and_overlap_test.sql`: Manager/HR authorization checks + overlap rejection
 - `tests/007_retention_purge_test.sql`: Retention purge behavior for queue and error log
-
-## Scheduler Script
-- `scripts/manage_scheduler_job.sql`: Create and drop both jobs
-  - `LMS_MONTHLY_ACCRUAL_JOB`
-  - `LMS_RETENTION_PURGE_JOB`
+- `tests/008_api_hardening_test.sql`: Input/state validation checks for hardened APIs
+- `tests/009_dashboard_views_test.sql`: Dashboard view query verification
 
 ## Notes
 - Default seed data uses year `2026` balances.

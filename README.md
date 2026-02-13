@@ -95,6 +95,11 @@ Or run setup + compile + all tests in one shot:
   - `LMS_RETENTION_PURGE_JOB`
 - `scripts/demo_interview_flow.sql`: End-to-end demo for interview/project walkthrough
 
+## Final Polish Docs
+- `docs/RELEASE_CHECKLIST.md`: Pre-release and post-release verification checklist
+- `docs/COMMIT_PLAN.md`: Suggested commit breakdown and message patterns
+- `docs/INTERVIEW_PITCH.md`: Ready-to-use short interview pitch script
+
 ## Tests
 - `tests/001_smoke_test.sql`: Leave request apply + 2-level approval flow
 - `tests/002_employee_pkg_test.sql`: Employee lifecycle APIs
